@@ -1,154 +1,294 @@
-package CountriesProj;
+	package CountriesProj;
 
-import java.io.BufferedReader;
-import java.io.InputStreamReader;
-import java.net.HttpURLConnection;
-import java.net.URL;
-import java.sql.Connection;
-import java.sql.DriverManager;
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
-import java.sql.SQLException;
-import java.sql.Statement;
-import org.json.simple.JSONArray;
-import org.json.simple.JSONObject;
-import org.json.simple.parser.JSONParser;
-import org.json.simple.parser.JSONParser;
+	import java.io.*;
+	import java.net.*;
+	import java.nio.charset.StandardCharsets;
+	import java.sql.*;
+	import java.util.Scanner;
+
+	import org.json.*;
 
 public class CountriesMain {
 
 
-	    private static final String DATABASE_NAME = "Countries";
-	    private static final String DATABASE_USERNAME = "sa";
-	    private static final String DATABASE_PASSWORD = "root";
-	    private static final String TABLE_NAME = "countries";
+
+	    private static final String API_URL = "https://restcountries.com/v3.1/all";
+
+	    private static final String CREATE_COUNTRY_TABLE_SQL =
+	        "CREATE TABLE IF NOT EXISTS country (" +
+	            "id INT(11) NOT NULL AUTO_INCREMENT, " +
+	            "name VARCHAR(255), " +
+	            "capital VARCHAR(255), " +
+	            "region VARCHAR(255), " +
+	            "PRIMARY KEY (id)" +
+	        ")";
+
+	    private static final String CREATE_CITY_TABLE_SQL =
+	        "CREATE TABLE IF NOT EXISTS city (" +
+	            "id INT(11) NOT NULL AUTO_INCREMENT, " +
+	            "name VARCHAR(255), " +
+	            "country_id INT(11), " +
+	            "PRIMARY KEY (id), " +
+	            "FOREIGN KEY (country_id) REFERENCES country(id)" +
+	        ")";
+
+	    private static final String INSERT_COUNTRY_SQL =
+	        "INSERT INTO country (name, capital, region) VALUES (?, ?, ?)";
+
+	    private static final String INSERT_CITY_SQL =
+	        "INSERT INTO city (name, country_id) VALUES (?, ?)";
+
+	    private static final String SELECT_COUNTRY_BY_CAPITAL_SQL =
+	        "SELECT * FROM country WHERE capital = ?";
+
+	    private static final String SELECT_COUNTRY_BY_REGION_SQL =
+	        "SELECT * FROM country WHERE region = ?";
+
+	    private static final String SELECT_CITY_BY_COUNTRY_SQL =
+	        "SELECT * FROM city WHERE country_id = ?";
+
+	    private static final String BACKUP_FILE_PATH = "countries_backup.sql";
+
+	    private static final Scanner scanner = new Scanner(System.in);
+
+	    private static Connection connection;
 
 	    public static void main(String[] args) {
+	        initializeDatabase();
+	        boolean exit = false;
+	        while (!exit) {
+	            System.out.println("Enter an option:\n" +
+	                "1. Fetch data from API\n" +
+	                "2. Fetch data from database\n" +
+	                "3. Search countries by capital or region\n" +
+	                "4. Backup database\n" +
+	                "5. Remove tables from database\n" +
+	                "6. Exit");
+	            int option = scanner.nextInt();
+	            scanner.nextLine(); // consume the newline character
+
+	            switch (option) {
+	                case 1:
+	                    fetchFromApi();
+	                    break;
+	                case 2:
+	                    fetchFromDatabase();
+	                    break;
+	                case 3:
+	                    searchCountries();
+	                    break;
+	                case 4:
+	                    backupDatabase();
+	                    break;
+	                case 5:
+	                    removeTables();
+	                    break;
+	                case 6:
+	                    exit = true;
+	                    break;
+	                default:
+	                    System.out.println("Invalid option, try again");
+	                    break;
+	            }
+	        }
+	    }
+
+	    private static void initializeDatabase() {
 	        try {
-	            // Initialize database
-	            initializeDatabase();
+	            // Get database credentials from user
+	            System.out.print("Enter MySQL username: ");
+	            String username = scanner.nextLine();
+	            System.out.print("Enter MySQL password: ");
+	            String password = scanner.nextLine();
 
-	            // Fetch data from API
-	            JSONArray data = fetchApiData();
+	            // Open a connection
+	            System.out.println("Connecting to database...");
+	            connection = DriverManager.getConnection("jdbc:mysql://localhost", username, password);
 
-	            // Insert data into database
-	            insertData(data);
+	            // Create the database if it does not exist
+	            Statement statement = connection.createStatement();
+	            statement.executeUpdate("CREATE DATABASE IF NOT EXISTS CountriesProj");
+	            statement.close();
 
-	            // Fetch data from database and print it
-	            fetchData();
-	        } catch (Exception e) {
-	            e.printStackTrace();
+	            // Select the database
+	            connection.setCatalog("CountriesProj");
+
+	            // Create tables if they do not exist
+	            statement = connection.createStatement();
+	            statement.executeUpdate(CREATE_CITY_TABLE_SQL);
+	            statement.close();
+	            System.out.println("Database initialized successfully");
+	            } catch (SQLException e) {
+	            System.out.println("Failed to initialize database: " + e.getMessage());
+	            }
+	            }
+	    
+	    private static void fetchFromApi() {
+	        try {
+	            System.out.println("Fetching data from API...");
+	            URL url = new URL(API_URL);
+	            HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+	            conn.setRequestMethod("GET");
+
+	            BufferedReader in = new BufferedReader(new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8));
+	            StringBuilder responseBuilder = new StringBuilder();
+	            String responseLine;
+	            while ((responseLine = in.readLine()) != null) {
+	                responseBuilder.append(responseLine);
+	            }
+	            in.close();
+
+	            String response = responseBuilder.toString();
+	            JSONArray countriesArray = new JSONArray(response);
+
+	            PreparedStatement countryStatement = connection.prepareStatement(INSERT_COUNTRY_SQL);
+	            PreparedStatement cityStatement = connection.prepareStatement(INSERT_CITY_SQL);
+
+	            for (int i = 0; i < countriesArray.length(); i++) {
+	            	JSONObject countryObject = countriesArray.getJSONObject(i).getJSONObject("name");
+
+	            	String countryName = countryObject.getString("common");
+	            	String capital = null;
+	            	if (countryObject.has("capital")) {
+	            	    capital = countryObject.getJSONObject("capital").getString(0);
+	            	}
+	            	String region = null;
+	            	if (countryObject.has("region")) {
+	            	    region = countryObject.getString("region");
+	            	}
+
+	            	countryStatement.setString(1, countryName);
+	            	countryStatement.setString(2, capital);
+	            	countryStatement.setString(3, region);
+	            	countryStatement.executeUpdate();
+
+
+	                ResultSet rs = countryStatement.getGeneratedKeys();
+	                int countryId = -1;
+	                if (rs.next()) {
+	                    countryId = rs.getInt(1);
+	                }
+
+	                JSONArray citiesArray = countriesArray.getJSONObject(i).getJSONArray("city");
+	                for (int j = 0; j < citiesArray.length(); j++) {
+	                    String cityName = citiesArray.getString(j);
+	                    cityStatement.setString(1, cityName);
+	                    cityStatement.setInt(2, countryId);
+	                    cityStatement.executeUpdate();
+	                }
+	            }
+
+	            countryStatement.close();
+	            cityStatement.close();
+
+	            System.out.println("Data fetched from API successfully");
+	        } catch (IOException | SQLException | JSONException e) {
+	            System.out.println("Failed to fetch data from API: " + e.getMessage());
 	        }
 	    }
 
-	    private static void initializeDatabase() throws ClassNotFoundException, SQLException {
-	        // Load the SQL Server JDBC driver
-	        Class.forName("com.microsoft.sqlserver.jdbc.SQLServerDriver");
+	    private static void fetchFromDatabase() {
+	        try {
+	            Statement statement = connection.createStatement();
+	            ResultSet resultSet = statement.executeQuery("SELECT * FROM country");
+	            while (resultSet.next()) {
+	                System.out.printf("%-20s %-20s %-20s\n",
+	                        resultSet.getString("name"),
+	                        resultSet.getString("capital"),
+	                        resultSet.getString("region"));
 
-	        // Connect to the database
-	        Connection connection = DriverManager.getConnection(
-	                "jdbc:sqlserver://localhost:1433;databaseName=" + DATABASE_NAME,
-	                DATABASE_USERNAME,
-	                DATABASE_PASSWORD);
-
-	        // Create the table if it doesn't exist
-	        Statement statement = connection.createStatement();
-	        statement.executeUpdate("CREATE TABLE IF NOT EXISTS " + TABLE_NAME + " ("
-	                + "id INT PRIMARY KEY IDENTITY,"
-	                + "name VARCHAR(255),"
-	                + "capital VARCHAR(255),"
-	                + "region VARCHAR(255),"
-	                + "population BIGINT,"
-	                + "flag VARCHAR(255)"
-	                + ")");
-
-	        // Close the connection
-	        connection.close();
+	                int countryId = resultSet.getInt("id");
+	                PreparedStatement cityStatement = connection.prepareStatement(SELECT_CITY_BY_COUNTRY_SQL);
+	                cityStatement.setInt(1, countryId);
+	                ResultSet cityResultSet = cityStatement.executeQuery();
+	                while (cityResultSet.next()) {
+	                    System.out.printf("%-40s %s\n", "", cityResultSet.getString("name"));
+	                }
+	                cityResultSet.close();
+	                cityStatement.close();
+	            }
+	            resultSet.close();
+	            statement.close();
+	        } catch (SQLException e) {
+	            System.out.println("Failed to fetch data from database: " + e.getMessage());
+	        }
 	    }
 
-	    private static JSONArray fetchApiData() throws Exception {
-	        // Create a URL object
-	        URL url = new URL("https://restcountries.com/v3.1/all");
-
-	        // Create an HTTP connection
-	        HttpURLConnection connection = (HttpURLConnection) url.openConnection();
-
-	        // Set the request method
-	        connection.setRequestMethod("GET");
-
-	        // Read the response
-	        BufferedReader reader = new BufferedReader(new InputStreamReader(connection.getInputStream()));
-	        String line;
-	        StringBuilder response = new StringBuilder();
-	        while ((line = reader.readLine()) != null) {
-	            response.append(line);
+	    private static void removeTables() {
+	        try {
+	            Statement statement = connection.createStatement();
+	            statement.executeUpdate("DROP TABLE IF EXISTS city");
+	            statement.executeUpdate("DROP TABLE IF EXISTS country");
+	            statement.close();
+	            System.out.println("Tables removed successfully");
+	        } catch (SQLException e) {
+	            System.out.println("Failed to remove tables: " + e.getMessage());
 	        }
-	        reader.close();
-
-	        // Parse the JSON data
-	        JSONParser parser = new JSONParser();
-	        JSONArray data = (JSONArray) parser.parse(response.toString());
-
-	        return data;
 	    }
 
-	    private static void insertData(JSONArray data) throws ClassNotFoundException, SQLException {
-	        // Load the SQL Server JDBC driver
-	        Class.forName("com.microsoft.sqlserver.jdbc.SQLServerDriver");
+	    private static void backupDatabase() {
+	        try {
+	            // Create backup file
+	            FileWriter writer = new FileWriter("C:\\Users\\Lenovo\\eclipse-workspace\\CountriesProject\\countries_backup.sql");
+	            System.out.println("Creating backup file...");
+	            // Initialize process for running mysqldump command
+	            String[] cmd = new String[]{"mysqldump", "--user=root", "--password=root", "CountriesProj"};
+	            Process process = Runtime.getRuntime().exec(cmd);
+	            // Pipe output of mysqldump to backup file
+	            BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()));
+	            String line;
+	            while ((line = reader.readLine()) != null) {
+	                writer.write(line + "\n");
+	            }
+	            writer.close();
+	            reader.close();
+	            System.out.println("Database backed up successfully to " + "C:\\Users\\Lenovo\\eclipse-workspace\\CountriesProject\\countries_backup.sql");
 
-	        // Connect to the database
-	        Connection connection = DriverManager.getConnection(
-	                "jdbc:sqlserver://localhost:1433;databaseName=" + DATABASE_NAME,
-	                DATABASE_USERNAME,
-	                DATABASE_PASSWORD);
-
-	        // Insert the data into the table
-	        String query = "INSERT INTO " + TABLE_NAME + " (name, capital, region, population, flag) VALUES (?, ?, ?, ?, ?)";
-	        PreparedStatement statement = connection.prepareStatement(query);
-	        for (Object obj : data) {
-	            JSONObject country = (JSONObject) obj;
-	            statement.setString(1, (String) country.get("name").toString());
-	            statement.setString(2, (String) country.get("capital").toString());
-	            statement.setString(3, (String) country.get("region").toString());
-	            Long population = country.get("population") instanceof Long ? (Long) country.get("population") : Long.parseLong((String) country.get("population"));
-	            statement.setLong(4, population);
-	            statement.setString(5, (String) country.get("flag").toString());
-	            statement.executeUpdate();
+	        } catch (IOException e) {
+	            System.out.println("Failed to backup database: " + e.getMessage());
 	        }
-
-
-
-	        // Close the connection
-	        connection.close();
 	    }
+	    
+	    private static void searchCountries() {
+	        System.out.println("Enter an option:\n" +
+	            "1. Search countries by capital\n" +
+	            "2. Search countries by region");
+	        int option = scanner.nextInt();
+	        scanner.nextLine(); // consume the newline character
 
-	    private static void fetchData() throws ClassNotFoundException, SQLException {
-	        // Load the SQL Server JDBC driver
-	        Class.forName("com.microsoft.sqlserver.jdbc.SQLServerDriver");
+	        try {
+	            PreparedStatement statement;
+	            switch (option) {
+	                case 1:
+	                    System.out.print("Enter capital name: ");
+	                    String capital = scanner.nextLine();
+	                    statement = connection.prepareStatement(SELECT_COUNTRY_BY_CAPITAL_SQL);
+	                    statement.setString(1, capital);
+	                    break;
+	                case 2:
+	                    System.out.print("Enter region name: ");
+	                    String region = scanner.nextLine();
+	                    statement = connection.prepareStatement(SELECT_COUNTRY_BY_REGION_SQL);
+	                    statement.setString(1, region);
+	                    break;
+	                default:
+	                    System.out.println("Invalid option, try again");
+	                    return;
+	            }
 
-	        // Connect to the database
-	        Connection connection = DriverManager.getConnection(
-	                "jdbc:sqlserver://localhost:1433;databaseName=" + DATABASE_NAME,
-	                DATABASE_USERNAME,
-	                DATABASE_PASSWORD);
+	            ResultSet resultSet = statement.executeQuery();
 
-	        // Fetch the data from the table
-	        String query = "SELECT * FROM " + TABLE_NAME;
-	        Statement statement = connection.createStatement();
-	        ResultSet resultSet = statement.executeQuery(query);
+	            while (resultSet.next()) {
+	                System.out.println(resultSet.getString("name") + " (" +
+	                        resultSet.getString("capital") + ") - " +
+	                        resultSet.getString("region"));
+	            }
 
-	        // Print the data
-	        while (resultSet.next()) {
-	            System.out.println("id: " + resultSet.getInt("id"));
-	            System.out.println("name: " + resultSet.getString("name"));
-	            System.out.println("capital: " + resultSet.getString("capital"));
-	            System.out.println("region: " + resultSet.getString("region"));
-	            System.out.println("population: " + resultSet.getLong("population"));
-	            System.out.println("flag: " + resultSet.getString("flag"));
-	            System.out.println();
+	            resultSet.close();
+	            statement.close();
+
+	        } catch (SQLException e) {
+	            System.out.println("Failed to search countries: " + e.getMessage());
 	        }
-
-	        // Close the connection
-	        connection.close();
 	    }
 }
